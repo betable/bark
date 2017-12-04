@@ -34,6 +34,8 @@ type Watchdog struct {
 	needRestart           bool
 	cmd                   *exec.Cmd
 	exitAfterReaping      bool
+	sout bytes.Buffer
+	serr bytes.Buffer
 }
 
 // NewWatchdog creates a Watchdog structure but
@@ -163,15 +165,13 @@ func (w *Watchdog) Start() {
 				w.cmd = exec.Command(w.PathToChildExecutable, w.Args...)
 				w.cmd.Dir = w.Cwd
 
-				var sout bytes.Buffer
-				var serr bytes.Buffer
-				w.cmd.Stdout = &sout
-				w.cmd.Stderr = &serr
+				w.cmd.Stdout = &w.sout
+				w.cmd.Stderr = &w.serr
 
 				err = w.cmd.Start()
 				if err != nil {
 					w.err = err
-					Q(" debug: unable to start: '%v' '%v' '%v'", w.err, sout.String(), serr.String())
+					Q(" debug: unable to start: '%v' '%v' '%v'", w.err, w.sout.String(), w.serr.String())
 					return
 				}
 				w.curPid = w.cmd.Process.Pid
@@ -228,6 +228,7 @@ func (w *Watchdog) Start() {
 						continue reaploop
 					case pid == w.cmd.Process.Pid:
 						Q(" Watchdog saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
+						Q(" stdout: '%v'\nstderr: '%v'\n", w.sout.String(), w.serr.String())
 						if w.exitAfterReaping {
 							Q("watchdog sees exitAfterReaping. exiting now.")
 							return
