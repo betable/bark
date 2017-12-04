@@ -1,6 +1,8 @@
 package bark
 
 import (
+	"bytes"
+	"os/exec"
 	"fmt"
 	"log"
 	"os"
@@ -25,11 +27,12 @@ type Watchdog struct {
 	shutdown bool
 
 	PathToChildExecutable string
+	Cwd string
 	Args                  []string
-	Attr                  os.ProcAttr
+	// Attr                  os.ProcAttr
 	err                   error
 	needRestart           bool
-	proc                  *os.Process
+	cmd                   *exec.Cmd
 	exitAfterReaping      bool
 }
 
@@ -42,7 +45,8 @@ type Watchdog struct {
 // empty os.ProcAttr will be supplied to the
 // os.StartProcess() call.
 func NewWatchdog(
-	attr *os.ProcAttr,
+	//attr *os.ProcAttr,
+	cwd string,
 	pathToChildExecutable string,
 	args ...string) *Watchdog {
 
@@ -60,10 +64,11 @@ func NewWatchdog(
 		Done:       make(chan bool),
 		CurrentPid: make(chan int),
 	}
+	w.Cwd = cwd
 
-	if attr != nil {
-		w.Attr = *attr
-	}
+	// if attr != nil {
+	// 	w.Attr = *attr
+	// }
 	return w
 }
 
@@ -74,7 +79,7 @@ func NewWatchdog(
 func StartAndWatch(pathToProcess string, args ...string) (*Watchdog, error) {
 
 	// start our child; restart it if it dies.
-	watcher := NewWatchdog(nil, pathToProcess, args...)
+	watcher := NewWatchdog("", pathToProcess, args...)
 	watcher.Start()
 
 	return watcher, nil
@@ -134,8 +139,8 @@ func (w *Watchdog) Start() {
 	var ws syscall.WaitStatus
 	go func() {
 		defer func() {
-			if w.proc != nil {
-				w.proc.Release()
+			if w.cmd != nil && w.cmd.Process != nil {
+				w.cmd.Process.Release()
 			}
 			close(w.Done)
 			// can deadlock if we don't close(w.Done) before grabbing the mutex:
@@ -149,20 +154,30 @@ func (w *Watchdog) Start() {
 	reaploop:
 		for {
 			if w.needRestart {
-				if w.proc != nil {
-					w.proc.Release()
+				if w.cmd != nil && w.cmd.Process != nil {
+					w.cmd.Process.Release()
 				}
 				Q(" debug: about to start '%s'", w.PathToChildExecutable)
-				w.proc, err = os.StartProcess(w.PathToChildExecutable, w.Args, &w.Attr)
+				//w.cmd.SysProcAttr = &w.Attr;
+
+				w.cmd = exec.Command(w.PathToChildExecutable, w.Args...)
+				w.cmd.Dir = w.Cwd
+
+				var sout bytes.Buffer
+				var serr bytes.Buffer
+				w.cmd.Stdout = &sout
+				w.cmd.Stderr = &serr
+
+				err = w.cmd.Start()
 				if err != nil {
 					w.err = err
-					Q(" debug: unable to start: %v", w.err)
+					Q(" debug: unable to start: '%v' '%v' '%v'", w.err, sout.String(), serr.String())
 					return
 				}
-				w.curPid = w.proc.Pid
+				w.curPid = w.cmd.Process.Pid
 				w.needRestart = false
 				w.startCount++
-				Q(" Start number %d: Watchdog started pid %d / new process '%s'", w.startCount, w.proc.Pid, w.PathToChildExecutable)
+				Q(" Start number %d: Watchdog started pid %d / new process '%s'", w.startCount, w.cmd.Process.Pid, w.PathToChildExecutable)
 			}
 
 			select {
@@ -170,9 +185,9 @@ func (w *Watchdog) Start() {
 			case <-w.TermChildAndStopWatchdog:
 				Q(" TermChildAndStopWatchdog noted, exiting watchdog.Start() loop")
 
-				err := w.proc.Signal(syscall.SIGKILL)
+				err := w.cmd.Process.Signal(syscall.SIGKILL)
 				if err != nil {
-					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.proc.Pid, err)
+					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.cmd.Process.Pid, err)
 					w.SetErr(err)
 					log.Printf("%s", err)
 					return
@@ -184,9 +199,9 @@ func (w *Watchdog) Start() {
 				return
 			case <-w.RestartChild:
 				Q(" debug: got <-w.RestartChild")
-				err := w.proc.Signal(syscall.SIGKILL)
+				err := w.cmd.Process.Signal(syscall.SIGKILL)
 				if err != nil {
-					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.proc.Pid, err)
+					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.cmd.Process.Pid, err)
 					w.SetErr(err)
 					log.Printf("%s", err)
 					return
@@ -197,7 +212,7 @@ func (w *Watchdog) Start() {
 				Q(" debug: got <-signalChild")
 
 				for i := 0; i < 1000; i++ {
-					pid, err := syscall.Wait4(w.proc.Pid, &ws, syscall.WNOHANG, nil)
+					pid, err := syscall.Wait4(w.cmd.Process.Pid, &ws, syscall.WNOHANG, nil)
 					// pid > 0 => pid is the ID of the child that died, but
 					//  there could be other children that are signalling us
 					//  and not the one we in particular are waiting for.
@@ -211,8 +226,8 @@ func (w *Watchdog) Start() {
 						log.Printf("warning in reaploop, wait4(WNOHANG) returned error: '%s'. ws=%v", err, ws)
 						w.SetErr(err)
 						continue reaploop
-					case pid == w.proc.Pid:
-						Q(" Watchdog saw OUR current w.proc.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
+					case pid == w.cmd.Process.Pid:
+						Q(" Watchdog saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
 						if w.exitAfterReaping {
 							Q("watchdog sees exitAfterReaping. exiting now.")
 							return
@@ -232,7 +247,7 @@ func (w *Watchdog) Start() {
 						time.Sleep(time.Millisecond)
 					}
 				} // end for i
-				w.SetErr(fmt.Errorf("could not reap child PID %d or obtain wait4(WNOHANG)==0 even after 1000 attempts", w.proc.Pid))
+				w.SetErr(fmt.Errorf("could not reap child PID %d or obtain wait4(WNOHANG)==0 even after 1000 attempts", w.cmd.Process.Pid))
 				log.Printf("%s", w.err)
 				return
 			} // end select
