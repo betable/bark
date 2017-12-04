@@ -156,6 +156,7 @@ func (w *Watchdog) Start() {
 				w.proc, err = os.StartProcess(w.PathToChildExecutable, w.Args, &w.Attr)
 				if err != nil {
 					w.err = err
+					Q(" debug: unable to start: %v", w.err)
 					return
 				}
 				w.curPid = w.proc.Pid
