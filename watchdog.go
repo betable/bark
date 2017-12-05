@@ -1,6 +1,7 @@
 package bark
 
 import (
+	"time"
 	"bytes"
 	"os/exec"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 )
 
 type Watchdog struct {
@@ -22,6 +22,11 @@ type Watchdog struct {
 	curPid                   int
 
 	startCount int64
+
+	MaxRetries int
+	retryCount int
+	RetryInterval time.Duration
+	DeclareSuccessInterval time.Duration  // time after which process is declared successfully (re)started
 
 	mut      sync.Mutex
 	shutdown bool
@@ -65,8 +70,11 @@ func NewWatchdog(
 		TermChildAndStopWatchdog: make(chan bool),
 		Done:       make(chan bool),
 		CurrentPid: make(chan int),
+		Cwd: cwd,
+		MaxRetries: 10,
+		RetryInterval: 5 * time.Second,
+		DeclareSuccessInterval: 10 * time.Second,
 	}
-	w.Cwd = cwd
 
 	// if attr != nil {
 	// 	w.Attr = *attr
@@ -155,12 +163,27 @@ func (w *Watchdog) Start() {
 
 	reaploop:
 		for {
+			w.mut.Lock()
+			if w.retryCount > w.MaxRetries {
+				Q(" debug: unable to start after %v retries, giving up", w.retryCount)
+				w.err = fmt.Errorf("unable to start process after %v retries, giving up", w.retryCount)
+				return
+			}
+			w.mut.Unlock()
+
 			if w.needRestart {
 				if w.cmd != nil && w.cmd.Process != nil {
 					w.cmd.Process.Release()
 				}
 				Q(" debug: about to start '%s'", w.PathToChildExecutable)
 				//w.cmd.SysProcAttr = &w.Attr;
+
+				w.mut.Lock()
+				if w.retryCount > 0 {
+					Q("Sleeping for %v before attempting restart; retryCount = %v (max = %v)", w.RetryInterval, w.retryCount, w.MaxRetries)
+					time.Sleep(w.RetryInterval)
+				}
+				w.mut.Unlock()
 
 				w.cmd = exec.Command(w.PathToChildExecutable, w.Args...)
 				w.cmd.Dir = w.Cwd
@@ -177,6 +200,21 @@ func (w *Watchdog) Start() {
 				w.curPid = w.cmd.Process.Pid
 				w.needRestart = false
 				w.startCount++
+
+				w.mut.Lock()
+				w.retryCount++
+
+				// reset retry count after an interval of process stability
+				go func(currRetryCount int) {
+					time.Sleep(w.DeclareSuccessInterval)
+					w.mut.Lock()
+					if w.retryCount == currRetryCount {
+						w.retryCount = 0
+					}
+					w.mut.Unlock()
+				}(w.retryCount)
+				w.mut.Unlock()
+
 				Q(" Start number %d: Watchdog started pid %d / new process '%s'", w.startCount, w.cmd.Process.Pid, w.PathToChildExecutable)
 			}
 
