@@ -234,7 +234,7 @@ func (w *Watchdog) Start() {
 				}(w.retryCount)
 				w.mut.Unlock()
 
-				w.logEvent(true, "started pid %d '%s' for the %d time", w.cmd.Process.Pid, w.PathToChildExecutable, w.startCount)
+				w.logEvent(true, "started pid %d '%s'; total start count %d", w.cmd.Process.Pid, w.PathToChildExecutable, w.startCount)
 			}
 
 			select {
