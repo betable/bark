@@ -148,6 +148,8 @@ func (w *Watchdog) logEvent(isDebug bool, format string, a ...interface{}) {
 		return
 	}
 
+	format = "Watchdog: " + format
+
 	if w.Logger != nil {
 		w.Logger(format, a...)
 	} else {
@@ -182,7 +184,7 @@ func (w *Watchdog) Start() {
 		for {
 			w.mut.Lock()
 			if w.retryCount > w.MaxRetries {
-				w.logEvent(true, " debug: unable to start after %v retries, giving up", w.retryCount)
+				w.logEvent(true, "unable to start after %v retries, giving up", w.retryCount)
 				w.err = fmt.Errorf("unable to start process after %v retries, giving up", w.retryCount)
 				return
 			}
@@ -192,12 +194,12 @@ func (w *Watchdog) Start() {
 				if w.cmd != nil && w.cmd.Process != nil {
 					w.cmd.Process.Release()
 				}
-				w.logEvent(true, " debug: about to start '%s'", w.PathToChildExecutable)
+				w.logEvent(true, "about to start '%s'", w.PathToChildExecutable)
 				//w.cmd.SysProcAttr = &w.Attr;
 
 				w.mut.Lock()
 				if w.retryCount > 0 {
-					w.logEvent(true, "Sleeping for %v before attempting restart; retryCount = %v (max = %v)", w.RetryInterval, w.retryCount, w.MaxRetries)
+					w.logEvent(true, "sleeping for %v before attempting restart; retryCount = %v (max = %v)", w.RetryInterval, w.retryCount, w.MaxRetries)
 					time.Sleep(w.RetryInterval)
 				}
 				w.mut.Unlock()
@@ -211,7 +213,7 @@ func (w *Watchdog) Start() {
 				err = w.cmd.Start()
 				if err != nil {
 					w.err = err
-					w.logEvent(true, " debug: unable to start: '%v' '%v' '%v'", w.err, w.sout.String(), w.serr.String())
+					w.logEvent(true, "unable to start: '%v' '%v' '%v'", w.err, w.sout.String(), w.serr.String())
 					return
 				}
 				w.curPid = w.cmd.Process.Pid
@@ -232,13 +234,13 @@ func (w *Watchdog) Start() {
 				}(w.retryCount)
 				w.mut.Unlock()
 
-				w.logEvent(true, " Start number %d: Watchdog started pid %d / new process '%s'", w.startCount, w.cmd.Process.Pid, w.PathToChildExecutable)
+				w.logEvent(true, "started pid %d '%s' for the %d time", w.cmd.Process.Pid, w.PathToChildExecutable, w.startCount)
 			}
 
 			select {
 			case w.CurrentPid <- w.curPid:
 			case <-w.TermChildAndStopWatchdog:
-				w.logEvent(true, " TermChildAndStopWatchdog noted, exiting watchdog.Start() loop")
+				w.logEvent(true, "TermChildAndStopWatchdog noted, exiting watchdog.Start() loop")
 
 				err := w.cmd.Process.Signal(syscall.SIGKILL)
 				if err != nil {
@@ -250,10 +252,10 @@ func (w *Watchdog) Start() {
 				w.exitAfterReaping = true
 				continue reaploop
 			case <-w.ReqStopWatchdog:
-				w.logEvent(true, " ReqStopWatchdog noted, exiting watchdog.Start() loop")
+				w.logEvent(true, "ReqStopWatchdog noted, exiting watchdog.Start() loop")
 				return
 			case <-w.RestartChild:
-				w.logEvent(true, " debug: got <-w.RestartChild")
+				w.logEvent(true, "got <-w.RestartChild")
 				err := w.cmd.Process.Signal(syscall.SIGKILL)
 				if err != nil {
 					err = fmt.Errorf("warning: watchdog tried to SIGKILL pid %d but got error: '%s'", w.cmd.Process.Pid, err)
@@ -264,7 +266,7 @@ func (w *Watchdog) Start() {
 				w.curPid = 0
 				continue reaploop
 			case <-signalChild:
-				w.logEvent(true, " debug: got <-signalChild")
+				w.logEvent(true, "got <-signalChild")
 
 				for i := 0; i < 1000; i++ {
 					pid, err := syscall.Wait4(w.cmd.Process.Pid, &ws, syscall.WNOHANG, nil)
@@ -274,7 +276,7 @@ func (w *Watchdog) Start() {
 					// pid -1 && errno == ECHILD => no new status children
 					// pid -1 && errno != ECHILD => syscall interupped by signal
 					// pid == 0 => no more children to wait for.
-					w.logEvent(true, " pid=%v  ws=%v and err == %v", pid, ws, err)
+					w.logEvent(true, "pid=%v  ws=%v and err == %v", pid, ws, err)
 					switch {
 					case err != nil:
 						err = fmt.Errorf("wait4() got error back: '%s' and ws:%v", err, ws)
@@ -282,10 +284,10 @@ func (w *Watchdog) Start() {
 						w.SetErr(err)
 						continue reaploop
 					case pid == w.cmd.Process.Pid:
-						w.logEvent(true, " Watchdog saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
-						w.logEvent(true, " stdout: '%v'\nstderr: '%v'\n", w.sout.String(), w.serr.String())
+						w.logEvent(true, " saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
+						w.logEvent(true, "Watchdog:\nstdout: '%v'\nstderr: '%v'\n", w.sout.String(), w.serr.String())
 						if w.exitAfterReaping {
-							w.logEvent(true, "watchdog sees exitAfterReaping. exiting now.")
+							w.logEvent(true, "sees exitAfterReaping. exiting now.")
 							return
 						}
 						w.needRestart = true
@@ -299,7 +301,7 @@ func (w *Watchdog) Start() {
 						w.logEvent(true, "pid == 0 on wait4, (perhaps SIGSTOP?): nobody left to wait for, keep looping. ws = %v", ws)
 						continue reaploop
 					default:
-						w.logEvent(true, " warning in reaploop: wait4() negative or not our pid, sleep and try again")
+						w.logEvent(true, "warning in reaploop: wait4() negative or not our pid, sleep and try again")
 						time.Sleep(time.Millisecond)
 					}
 				} // end for i
