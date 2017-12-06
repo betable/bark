@@ -284,8 +284,8 @@ func (w *Watchdog) Start() {
 						w.SetErr(err)
 						continue reaploop
 					case pid == w.cmd.Process.Pid:
-						w.logEvent(true, " saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
-						w.logEvent(true, "Watchdog:\nstdout: '%v'\nstderr: '%v'\n", w.sout.String(), w.serr.String())
+						w.logEvent(true, "saw OUR current w.cmd.Process.Pid %d/process '%s' finish with waitstatus: %v.", pid, w.PathToChildExecutable, ws)
+						w.logEvent(true, "\nstdout: '%v'\nstderr: '%v'\n", w.sout.String(), w.serr.String())
 						if w.exitAfterReaping {
 							w.logEvent(true, "sees exitAfterReaping. exiting now.")
 							return
