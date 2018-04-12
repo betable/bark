@@ -1,9 +1,9 @@
 package bark
 
 import (
-	"log"
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,6 +16,7 @@ type WatchdogLogFunc func(format string, a ...interface{})
 
 type Watchdog struct {
 	Ready                    chan bool
+	Restarting               chan bool
 	RestartChild             chan bool
 	ReqStopWatchdog          chan bool
 	TermChildAndStopWatchdog chan bool
@@ -23,7 +24,7 @@ type Watchdog struct {
 	CurrentPid               chan int
 	curPid                   int
 
-	Logger WatchdogLogFunc
+	Logger             WatchdogLogFunc
 	EnableDebugLogging bool
 
 	startCount int64
@@ -70,6 +71,7 @@ func NewWatchdog(
 		PathToChildExecutable: pathToChildExecutable,
 		Args:                     cpOfArgs,
 		Ready:                    make(chan bool),
+		Restarting:               make(chan bool, 1),
 		RestartChild:             make(chan bool),
 		ReqStopWatchdog:          make(chan bool),
 		TermChildAndStopWatchdog: make(chan bool),
@@ -210,6 +212,7 @@ func (w *Watchdog) Start() {
 				w.cmd.Stdout = &w.sout
 				w.cmd.Stderr = &w.serr
 
+				w.Restarting <- true
 				err = w.cmd.Start()
 				if err != nil {
 					w.err = err
